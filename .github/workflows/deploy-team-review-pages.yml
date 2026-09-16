@@ -6,6 +6,11 @@ on:
     paths:
       - 'docs/team-review/**'
       - '.github/workflows/deploy-team-review-pages.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/team-review/**'
+      - '.github/workflows/deploy-team-review-pages.yml'
   workflow_dispatch:
 
 permissions:
