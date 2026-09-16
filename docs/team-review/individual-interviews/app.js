@@ -89,117 +89,276 @@
   function bars(counts,label) { const max=Math.max(...Object.values(counts),1);const block=el('section',undefined,{class:'bar-chart'});block.append(el('h3',label));Object.entries(counts).filter(([,v])=>v>0).forEach(([name,value],i)=>{const row=el('div',undefined,{class:'bar-row'});const head=el('div',undefined,{class:'bar-head'});head.append(el('span',name),el('b',`${value}件`));const track=el('div',undefined,{class:'bar-track'}),bar=el('i','',{style:`width:${value/max*100}%;background:${palette[i%palette.length]}`});track.append(bar);row.append(head,track);block.append(row);});return block; }
   function sectionNotice() { return el('p','面談とアンケートは別の記録として扱います。件数は重要度・発話量・参加者数を示しません。',{class:'section-notice'}); }
 
-  function overview() { const host=el('div',undefined,{class:'overview'});const overviewCards=el('div',undefined,{class:'summary-grid'});synthesis.overview_findings.forEach(item=>overviewCards.append(summaryCard(item.title,item.text)));const header=el('header','',{class:'view-header'});header.append(el('p','全体を見る',{class:'eyebrow'}),el('h2','まず見えること'));host.append(header);
+  // ---- 軸のカテゴリと記号 ----------------------------------------------
+  const TOPIC_CATEGORIES = ['自己に関する記述','関係・集団に向かう記述','より広い文脈に向かう記述','この区分では判断しない'];
+  const AXIS_ORDER = {self_social:['自己','関係','社会'],inner_outer:['内面','外部環境'],temporal:['過去','現在','未来'],agency:['選択','交渉','制約'],movement:['継続','変化','移行'],abstraction:['具体的経験','抽象的判断'],certainty:['確信','迷い','両義性'],relation_mode:['個人','集団','制度']};
+  const formCategories = source => Object.keys(data.cross_case.form_counts[source] || {});
+  function axisCategories(source) {
+    if (state.axis === 'form') return formCategories(source);
+    if (state.axis === 'interpretive') return AXIS_ORDER[state.interpretiveAxis] || [];
+    return TOPIC_CATEGORIES;
+  }
+  const MARKS = {both:{glyph:'◎',label:'両方の記録に見られる'},a:{glyph:'●',label:'CASE Aだけに見られる'},b:{glyph:'■',label:'CASE Bだけに見られる'},none:{glyph:'—',label:'この観点では判断しない'}};
+  function mark(kind) { const m=MARKS[kind];const span=el('span',m.glyph,{class:`mark mark-${kind}`,role:'img','aria-label':m.label,title:m.label});return span; }
+  function markLegend() {
+    const list=el('ul',undefined,{class:'mark-legend'});
+    [['both','両方のケースに見られる'],['a','ケースAだけに見られる'],['b','ケースBだけに見られる'],['none','この観点では判断しない']]
+      .forEach(([kind,text])=>{const li=el('li');li.append(mark(kind),el('span',text));list.append(li)});
+    return list;
+  }
+  const caseMark = (inA,inB) => (inA&&inB) ? 'both' : inA ? 'a' : inB ? 'b' : 'none';
+
+  // ---- 比較のための値 --------------------------------------------------
+  function valuesFor(caseId, questionId, source) {
+    const q = question(caseId, questionId);
+    return axisValues(q, source, caseId).filter(Boolean);
+  }
+  function rangeValues(caseId, source) {
+    const ids = state.q === 'all' ? QUESTIONS : [state.q];
+    return [...new Set(ids.flatMap(id => valuesFor(caseId, id, source)))];
+  }
+  function compareSets(source) {
+    const a = rangeValues(state.a, source), b = rangeValues(state.b, source);
+    const order = axisCategories(source);
+    const sort = list => order.filter(x => list.includes(x)).concat(list.filter(x => !order.includes(x)));
+    return {common:sort(a.filter(x=>b.includes(x))), onlyA:sort(a.filter(x=>!b.includes(x))), onlyB:sort(b.filter(x=>!a.includes(x)))};
+  }
+  function readingSample(caseId, source, values) {
+    const ids = state.q === 'all' ? QUESTIONS : [state.q];
+    for (const id of ids) {
+      if (!values.length || valuesFor(caseId, id, source).some(v => values.includes(v))) {
+        const ctx = contextFor(caseId, id, source);
+        if (ctx && ctx.reading) return `${id}（${sourceLabel(source)}）：${ctx.reading}`;
+      }
+    }
+    return '';
+  }
+
+  // ---- 全体を見る ------------------------------------------------------
+  function researchNoteMatrix(note) {
+    const table=el('div',undefined,{class:'note-matrix',role:'table','aria-label':'関係するケースと問い'});
+    const headRow=el('div',undefined,{class:'note-matrix-row head',role:'row'});
+    headRow.append(el('span','',{role:'columnheader'}));
+    QUESTIONS.forEach(id=>headRow.append(el('span',id,{role:'columnheader'})));
+    table.append(headRow);
+    CASES.forEach(caseId=>{
+      const row=el('div',undefined,{class:'note-matrix-row',role:'row'});
+      row.append(el('span',caseId,{role:'rowheader'}));
+      QUESTIONS.forEach(id=>{
+        const hits=note.related.filter(x=>x.case_id===caseId&&x.question_id===id);
+        const cell=el('span',undefined,{role:'cell'});
+        if(!hits.length){cell.append(el('i','—',{class:'note-none','aria-label':'この問いでは関係しない'}));}
+        else{
+          const wrap=el('button',undefined,{type:'button',class:'note-cell','aria-label':`${caseId}の${id}を読む`});
+          hits.forEach(h=>wrap.append(el('i',h.record_type==='interview'?'●':'▲',{class:`note-glyph ${h.record_type}`,title:sourceLabel(h.record_type)})));
+          wrap.addEventListener('click',()=>go({view:'case',caseId,q:id}));
+          cell.append(wrap);
+        }
+        row.append(cell);
+      });
+      table.append(row);
+    });
+    const key=el('p','● 面談の記録 ／ ▲ アンケートの記録 ／ — この問いでは関係しない。印の数は重要度を示しません。',{class:'section-notice'});
+    const wrap=el('div',undefined,{class:'note-matrix-wrap'});
+    wrap.append(table,key);
+    return wrap;
+  }
+
+  function researchNote(note) {
+    const card=el('details',undefined,{class:'research-note'});
+    card.append(el('summary',note.title),el('p',note.summary,{class:'note-lead'}));
+    card.append(el('h3','記録から見えたこと'),el('p',note.seen_in_records));
+    const forms=el('div',undefined,{class:'context-grid'});
+    forms.append(reading('面談での現れ方',note.interview_form),reading('アンケートでの現れ方',note.questionnaire_form));
+    card.append(forms);
+    card.append(el('h3','社会・時代との接点'),el('p',note.social_connection));
+    card.append(el('h3','作品・研究へ開く問い'),el('p',note.open_question));
+    card.append(el('h3','別の読み方・限界'),el('p',note.alternative_reading,{class:'notice'}));
+    card.append(el('h3','関係するケースと問い'),researchNoteMatrix(note));
+    const links=el('div',undefined,{class:'evidence-links'});
+    note.evidence.forEach(item=>links.append(button(`${item.case_id} ${item.question_id}／${sourceLabel(item.record_type)}`,false,()=>go({view:'case',caseId:item.case_id,q:item.question_id}),{class:'evidence-link'})));
+    card.append(el('h3','関連する承認済み記録'),links);
+    const cards=el('div',undefined,{class:'record-grid'});
+    note.evidence.forEach(item=>cards.append(recordPanel(cardFor(item.case_id,item.question_id,item.record_type),question(item.case_id,item.question_id),item.case_id)));
+    card.append(cards);
+    return card;
+  }
+
+  function overview() { const host=el('div',undefined,{class:'overview'});const overviewCards=el('div',undefined,{class:'summary-grid'});synthesis.overview_findings.forEach(item=>overviewCards.append(summaryCard(item.title,item.text)));const header=el('header','', {class:'view-header'});header.append(el('p','全体を見る',{class:'eyebrow'}),el('h2','まず見えること'));host.append(header);
     const about=el('section',undefined,{class:'interpretive-about'});about.append(el('p','この調査が記録しようとしていること',{class:'eyebrow'}),el('h2',synthesis.about.title),el('p',synthesis.about.text),el('p',synthesis.about.limit,{class:'notice'}));host.append(about);
     const observations=el('section',undefined,{class:'block'});observations.append(el('h2','社会の断面として見えること'));const observationGrid=el('div',undefined,{class:'observation-grid'});synthesis.societal_observations.forEach(item=>{const card=el('details',undefined,{class:'observation'});card.append(el('summary',item.title),el('p',item.text),el('h3','研究・作品への問い'),el('p',item.question));const links=el('div',undefined,{class:'evidence-links'});item.evidence.forEach(itemEvidence=>{const label=`${itemEvidence.case_id} ${itemEvidence.question_id}／${sourceLabel(itemEvidence.record_type)}`;links.append(button(label,false,()=>go({view:'case',caseId:itemEvidence.case_id,q:itemEvidence.question_id}),{class:'evidence-link'}));});card.append(el('h3','根拠となる記録'),links);const details=el('div',undefined,{class:'observation-evidence'});item.evidence.forEach(itemEvidence=>details.append(recordPanel(cardFor(itemEvidence.case_id,itemEvidence.question_id,itemEvidence.record_type),question(itemEvidence.case_id,itemEvidence.question_id),itemEvidence.case_id)));card.append(details,el('h3','読み方の留保'),el('p',item.caveat));observationGrid.append(card)});observations.append(observationGrid);host.append(observations,el('section',undefined,{class:'block'}));host.lastElementChild.append(el('h2','具体的な横断的発見'),overviewCards);
     const qSection=el('section',undefined,{class:'block'});qSection.append(el('h2','質問ごとの構成'));const qGrid=el('div',undefined,{class:'question-grid'});QUESTIONS.forEach(id=>{const qs=data.cases.map(c=>question(c.case_id,id));const finding=questionFindingFor(id);const tags=countTags(qs).slice(0,4).map(x=>x[0]);const card=el('article',undefined,{class:'question-card'});card.append(el('p',id,{class:'eyebrow'}),el('h3',`質問 ${id}`),reading('面談側で見えること',finding.interview),reading('アンケート側で見えること',finding.questionnaire),reading('記録形式を行き来して読む',finding.connection),tagList(tags),button('詳細を見る',false,()=>go({view:'case',q:id,caseId:CASES[0]})));qGrid.append(card)});qSection.append(qGrid);host.append(qSection);
-    const chart=el('section',undefined,{class:'block'});chart.append(el('h2','全体グラフ'),sectionNotice());const chartGrid=el('div',undefined,{class:'chart-grid'});chartGrid.append(bars(data.cross_case.form_counts.interview,'面談：記録の表れ方'),bars(data.cross_case.form_counts.questionnaire,'アンケート：記録の表れ方'),donut(countTags(allQuestions()).slice(0,6),'テーマタグが現れる質問数','全体'));chart.append(chartGrid);host.append(chart);
-    const research=el('section',undefined,{class:'block'});research.append(el('h2','研究・作品への問い'));const researchGrid=el('div',undefined,{class:'note-grid'});synthesis.societal_observations.forEach(item=>researchGrid.append(summaryCard(item.title,item.question)));research.append(researchGrid);host.append(research);
-    const notes=el('section',undefined,{class:'block'});notes.append(el('h2','読み方の留保と研究ノート'));const noteGrid=el('div',undefined,{class:'note-grid'});synthesis.research_notes.forEach(note=>noteGrid.append(summaryCard(note.theme,note.note)));notes.append(noteGrid,sectionNotice());host.append(notes);return host; }
-  function caseView() { const c=data.cases.find(x=>x.case_id===state.caseId),q=question(c.case_id),caseSynthesis=caseSynthesisFor(c.case_id);const interviewContext=contextFor(c.case_id,q.question_id,'interview'),questionnaireContext=contextFor(c.case_id,q.question_id,'questionnaire');const host=el('div',undefined,{class:'case-view'});const head=el('header',undefined,{class:'view-header'});head.append(el('p',`${c.case_id} ／ 質問 ${q.question_id}`,{class:'eyebrow'}),el('h2','ケースを読む'));host.append(head);
-    const whole=el('details',undefined,{class:'case-synthesis'});whole.append(el('summary','このケースを横断して読む'),el('p',caseSynthesis.synthesis),el('h3','別の読み方と限界'),el('p',caseSynthesis.alternative_reading));host.append(whole);
-    const flow=el('section',undefined,{class:'block'});flow.append(el('h2','質問別の文脈要約'));const contexts=el('div',undefined,{class:'context-grid'});contexts.append(contextReading(interviewContext),contextReading(questionnaireContext));flow.append(contexts,el('h3','この記録から読み取れること'));const readings=el('div',undefined,{class:'context-grid'});readings.append(contentReading(interviewContext,'reading','読み取れること'),contentReading(questionnaireContext,'reading','読み取れること'));flow.append(readings);
-    const socialRows=[interviewContext,questionnaireContext].filter(row=>row.social_connection);if(socialRows.length){flow.append(el('h3','社会との接点'));const socialGrid=el('div',undefined,{class:'context-grid'});socialRows.forEach(row=>socialGrid.append(contentReading({ ...row, reading: row.social_connection },'reading','社会との接点')));flow.append(socialGrid);}
-    flow.append(el('h3','根拠となる引用・要約'),records(q,false,'both',c.case_id),el('h3','分析軸とその理由'));const axes=el('div',undefined,{class:'axis-grid'});axes.append(interpretiveAxes(c.case_id,q.question_id,'interview'),interpretiveAxes(c.case_id,q.question_id,'questionnaire'));flow.append(axes,el('h3','別の読み方・不足情報'));const alternatives=el('div',undefined,{class:'context-grid'});alternatives.append(contentReading({ ...interviewContext, reading: interviewContext.alternative_reading },'reading','別の読み方・不足情報'),contentReading({ ...questionnaireContext, reading: questionnaireContext.alternative_reading },'reading','別の読み方・不足情報'));flow.append(alternatives,el('h3','補助図表'),donut(countTags([q]),'この質問で確認済みのテーマタグ','質問 '+q.question_id),sectionNotice());host.append(flow);return host; }
+    const chart=el('section',undefined,{class:'block'});chart.append(el('h2','全体グラフ'),sectionNotice());const chartGrid=el('div',undefined,{class:'chart-grid'});chartGrid.append(bars(data.cross_case.form_counts.interview,'面談：記録の表れ方'),bars(data.cross_case.form_counts.questionnaire,'アンケート：記録の表れ方'),donut(countTags(allQuestions()).slice(0,6),'話題の向きが現れる問いの数','全体'));chart.append(chartGrid);host.append(chart);
+    const notes=el('section',undefined,{class:'block'});notes.append(el('h2','テーマ別研究ノート'),el('p','六つのケースの記録を横断して、内容のまとまりごとに読み直したノートです。見出しを選ぶと、記録での現れ方・社会との接点・次の問い・関係するケースと問いが開きます。',{class:'section-notice'}));const noteGrid=el('div',undefined,{class:'note-grid'});synthesis.research_notes.forEach(note=>noteGrid.append(researchNote(note)));notes.append(noteGrid,sectionNotice());host.append(notes);return host; }
+
+  // ---- ケースを読む ----------------------------------------------------
+  function caseView() {
+    const c=data.cases.find(x=>x.case_id===state.caseId),q=question(c.case_id);
+    const interviewContext=contextFor(c.case_id,q.question_id,'interview'),questionnaireContext=contextFor(c.case_id,q.question_id,'questionnaire');
+    const host=el('div',undefined,{class:'case-view'});
+    const head=el('header',undefined,{class:'view-header'});
+    head.append(el('p',`${c.case_id} ／ 問い ${q.question_id}`,{class:'eyebrow'}),el('h2',`${q.question_id}を文脈から読む`),el('p','ここから下は、選んだ問いだけを扱います。ケース全体の記述は、問いのタブの上にあります。',{class:'section-notice'}));
+    host.append(head);
+    const flow=el('section',undefined,{class:'block question-reading'});
+    flow.append(el('h3','この問いで扱われたこと'));
+    flow.append(el('p',`この問いの記録には、${q.tags.join('、')}が見られます。面談とアンケートは別の記録として読みます。`));
+    flow.append(el('h3','面談の文脈要約'),el('p',interviewContext.context));
+    flow.append(el('h3','アンケートの文脈要約'),el('p',questionnaireContext.context));
+    flow.append(el('h3','面談から読み取れること'),el('p',interviewContext.reading));
+    flow.append(el('h3','アンケートから読み取れること'),el('p',questionnaireContext.reading));
+    flow.append(el('h3','両方を行き来して見えること'),el('p',q.summary.both));
+    const socialRows=[interviewContext,questionnaireContext].filter(row=>row.social_connection);
+    if(socialRows.length){flow.append(el('h3','社会との接点'));const socialGrid=el('div',undefined,{class:'context-grid'});socialRows.forEach(row=>socialGrid.append(reading(`${sourceLabel(row.record_type)}：社会との接点`,row.social_connection)));flow.append(socialGrid);}
+    flow.append(el('h3','根拠となる引用・編集要約'),records(q,false,'both',c.case_id));
+    flow.append(el('h3','分析軸と理由'));
+    const axes=el('div',undefined,{class:'axis-grid'});axes.append(interpretiveAxes(c.case_id,q.question_id,'interview'),interpretiveAxes(c.case_id,q.question_id,'questionnaire'));flow.append(axes);
+    flow.append(el('h3','別の読み方・不足情報'));
+    const alternatives=el('div',undefined,{class:'context-grid'});
+    alternatives.append(reading(`面談：別の読み方・不足情報`,interviewContext.alternative_reading),reading(`アンケート：別の読み方・不足情報`,questionnaireContext.alternative_reading));
+    flow.append(alternatives);
+    flow.append(el('h3','補助図表'),donut(countTags([q]),`${q.question_id}の話題の向き`,q.question_id),sectionNotice());
+    host.append(flow);
+    return host;
+  }
+
+  // ---- ケースを比べる --------------------------------------------------
+  function compareChips() {
+    const chips=el('ul',undefined,{class:'compare-chips'});
+    const items=[`${state.a} と ${state.b}`, state.q==='all'?'すべての問い':`問い ${state.q}`,
+      state.source==='both'?'面談とアンケート':sourceLabel(state.source),
+      `比較軸：${state.axis==='topic'?'話題の向き':state.axis==='form'?'記録の表れ方':'解釈軸'}`];
+    if(state.axis==='interpretive') items.push(`解釈軸：${AXIS_LABELS[state.interpretiveAxis]}`);
+    items.forEach(text=>chips.append(el('li',text)));
+    return chips;
+  }
+  function compareSentence() {
+    const scope=state.q==='all'?'5つの問い':`問い ${state.q}`;
+    const src=state.source==='both'?'面談記録とアンケート回答':`${sourceLabel(state.source)}の記録`;
+    const lens=state.axis==='topic'?'「話題の向き」':state.axis==='form'?'「記録の表れ方」':`「${AXIS_LABELS[state.interpretiveAxis]}」`;
+    return `${state.a}と${state.b}について、${scope}の${src}を${lens}の観点から見ています。`;
+  }
+  function compareSummaryCards(source) {
+    const sets=compareSets(source);
+    const wrap=el('div',undefined,{class:'compare-cards'});
+    const build=(title,values,caseId)=>{
+      const text=values.length
+        ? (caseId ? `${caseId}だけに、${values.join('、')}が見られます。` : `両方のケースで、${values.join('、')}が見られます。`)
+        : (caseId ? `${caseId}だけに見られる区分は、この範囲ではありません。` : 'この範囲では、両方のケースに共通して見られる区分はありません。');
+      const card=summaryCard(title,text,values);
+      const targets=caseId?[caseId]:[state.a,state.b];
+      const seen=[];
+      targets.forEach(target=>{
+        const sample=readingSample(target,source,values);
+        if(sample&&!seen.includes(sample)){seen.push(sample);card.append(el('p',`${target} ${sample}`,{class:'card-sample'}));}
+      });
+      return card;
+    };
+    wrap.append(build('共通して見えること',sets.common,null),build(`${state.a}で見えること`,sets.onlyA,state.a),build(`${state.b}で見えること`,sets.onlyB,state.b));
+    return wrap;
+  }
+  function comparisonMatrix(source) {
+    const categories=axisCategories(source);
+    const table=el('div',undefined,{class:'compare-matrix',role:'table','aria-label':`${sourceLabel(source)}の${axisName()}の比較`});
+    const head=el('div',undefined,{class:'compare-matrix-row head',role:'row'});
+    head.append(el('span','問い',{role:'columnheader'}));
+    categories.forEach(name=>head.append(el('span',name,{role:'columnheader'})));
+    table.append(head);
+    QUESTIONS.forEach(id=>{
+      const a=valuesFor(state.a,id,source),b=valuesFor(state.b,id,source);
+      const row=el('button',undefined,{type:'button',class:'compare-matrix-row',role:'row','aria-label':`${id}の比較詳細を開く`});
+      row.append(el('span',id,{role:'rowheader',class:'row-head'}));
+      categories.forEach(name=>{
+        const cell=el('span',undefined,{role:'cell'});
+        cell.append(mark(caseMark(a.includes(name),b.includes(name))));
+        row.append(cell);
+      });
+      if(!a.length&&!b.length) row.append(el('span','該当なし',{class:'row-none'}));
+      row.addEventListener('click',()=>go({q:id}));
+      table.append(row);
+    });
+    return table;
+  }
+  function laneChart(source) {
+    const categories=axisCategories(source);
+    const wrap=el('div',undefined,{class:'lane-wrap'});
+    const ids=state.q==='all'?QUESTIONS:[state.q];
+    ids.forEach(id=>{
+      const a=valuesFor(state.a,id,source),b=valuesFor(state.b,id,source);
+      const lane=el('div',undefined,{class:'lane'});
+      lane.append(el('span',id,{class:'lane-label'}));
+      const track=el('div',undefined,{class:'lane-track',role:'img','aria-label':`${id}：${state.a}は${a.join('、')||'軸なし'}、${state.b}は${b.join('、')||'軸なし'}`});
+      categories.forEach(name=>{
+        const slot=el('span',undefined,{class:'lane-slot'});
+        slot.append(el('i',name,{class:'lane-name'}));
+        const marks=el('span',undefined,{class:'lane-marks'});
+        if(a.includes(name)) marks.append(el('b','●',{title:`${state.a}`}));
+        if(b.includes(name)) marks.append(el('b','■',{title:`${state.b}`}));
+        slot.append(marks);
+        track.append(slot);
+      });
+      lane.append(track);
+      if(!a.length&&!b.length) lane.append(el('span','軸なし',{class:'row-none'}));
+      wrap.append(lane);
+    });
+    return wrap;
+  }
+  function axisChart(source) {
+    if(state.axis==='interpretive') return laneChart(source);
+    if(state.axis==='form'){
+      const charts=el('div',undefined,{class:'compare-charts'});
+      [state.a,state.b].forEach(caseId=>{
+        const values=rangeValues(caseId,source);
+        if(!values.length){charts.append(el('p',`${caseId}：該当なし`,{class:'row-none'}));return;}
+        const counts={};
+        (state.q==='all'?QUESTIONS:[state.q]).forEach(id=>valuesFor(caseId,id,source).forEach(v=>{counts[v]=(counts[v]||0)+1}));
+        charts.append(donut(Object.entries(counts),`${caseId}：記録の表れ方（${sourceLabel(source)}）`,caseId));
+      });
+      return charts;
+    }
+    return comparisonMatrix(source);
+  }
+
   function comparison() {
-    const host = el('div', undefined, { class: 'compare-view' });
-    const header = el('header', undefined, { class: 'view-header' });
-    const sourceText = state.source === 'both' ? '面談とアンケート' : SOURCE_LABEL[state.source];
-    header.append(
-      el('p', 'ケースを比べる', { class: 'eyebrow' }),
-      el('h2', state.q === 'all' ? '5つの質問の概要' : '一つの質問を並べて読む'),
-      el('p', `比較軸は「${axisName()}」、表示する記録は「${sourceText}」です。順位や優劣ではなく、話題の向きと記録の表れ方を探索します。`)
-    );
+    const host=el('div',undefined,{class:'compare-view'});
+    const header=el('header',undefined,{class:'view-header'});
+    header.append(el('p','ケースを比べる',{class:'eyebrow'}),el('h2',state.q==='all'?'5つの問いを見渡す':'一つの問いを並べて読む'));
+    header.append(compareChips(),el('p',compareSentence(),{class:'compare-sentence'}));
+    header.append(el('p','「共通して見える」は、二人が同じことを言ったという意味ではありません。面談とアンケートは別の記録として数え、合算しません。',{class:'section-notice'}));
     host.append(header);
 
-    if (state.q === 'all') {
-      const matrix = el('div', undefined, { class: 'matrix' });
-      QUESTIONS.forEach(id => {
-        const a = question(state.a, id), b = question(state.b, id);
-        const row = el('button', undefined, { type: 'button' });
-        row.append(el('b', id));
-        activeSources().forEach(src => {
-          const va = axisValues(a, src, state.a), vb = axisValues(b, src, state.b);
-          const cell = el('span', undefined, { class: 'matrix-cell' });
-          if (state.source === 'both') cell.append(el('i', SOURCE_LABEL[src], { class: 'matrix-source' }));
-          cell.append(document.createTextNode(`${state.a}: ${va.join('、') || '該当なし'} ／ ${state.b}: ${vb.join('、') || '該当なし'}`));
-          row.append(cell);
-        });
-        row.addEventListener('click', () => go({ q: id }));
-        matrix.append(row);
-      });
-      host.append(el('p', `行を選ぶと、その質問の比較詳細を開きます。表は「${axisName()}」で表示しています。`, { class: 'section-notice' }), matrix, sectionNotice());
-      return host;
-    }
-
-    const qid = detailQuestion();
-    const qa = question(state.a, qid), qb = question(state.b, qid);
-
-    activeSources().forEach(src => {
-      const panel = el('section', undefined, { class: `compare-source ${src}` });
-      panel.append(el('h2', `${SOURCE_LABEL[src]}の記録`));
-      panel.append(el('p', `${axisName()}で読みます。`, { class: 'section-notice' }));
-
-      const cards = el('div', undefined, { class: 'compare-cards' });
-      if (state.axis === 'form' || state.axis === 'interpretive') {
-        cards.append(
-          summaryCard(`${state.a}の記録に現れたこと`, axisSummary(qa, src, state.a)),
-          summaryCard(`${state.b}の記録に現れたこと`, axisSummary(qb, src, state.b)),
-          summaryCard('比較の留保', `${contextFor(state.a, qid, src).alternative_reading} ${contextFor(state.b, qid, src).alternative_reading}`)
-        );
+    activeSources().forEach(source=>{
+      const panel=el('section',undefined,{class:`compare-source ${source}`});
+      panel.append(el('h2',`${sourceLabel(source)}の記録`));
+      panel.append(compareSummaryCards(source));
+      if(state.q==='all'){
+        panel.append(el('h3',`${axisName()}の比較`),el('p','行を選ぶと、その問いの詳しい比較へ移動します。',{class:'section-notice'}),axisChart(source),markLegend());
       } else {
-        const va = axisValues(qa, src, state.a), vb = axisValues(qb, src, state.b);
-        const common = va.filter(v => vb.includes(v));
-        const onlyA = va.filter(v => !vb.includes(v));
-        const onlyB = vb.filter(v => !va.includes(v));
-        cards.append(
-          summaryCard('共通して確認できること', common.length ? common.join('、') : '共通項なし', common),
-          summaryCard(`${state.a}で確認できること`, onlyA.length ? onlyA.join('、') : '該当なし', onlyA),
-          summaryCard(`${state.b}で確認できること`, onlyB.length ? onlyB.join('、') : '該当なし', onlyB)
-        );
+        const qid=state.q;
+        const ctxA=contextFor(state.a,qid,source),ctxB=contextFor(state.b,qid,source);
+        const contexts=el('div',undefined,{class:'context-grid'});
+        contexts.append(reading(`${state.a}の文脈要約`,ctxA?ctxA.context:'該当なし'),reading(`${state.b}の文脈要約`,ctxB?ctxB.context:'該当なし'));
+        panel.append(el('h3','それぞれの文脈要約'),contexts);
+        const sets=compareSets(source);
+        panel.append(el('h3','共通して読めること'),el('p',sets.common.length?`両方の記録で、${sets.common.join('、')}が見られます。`:'この問いでは、両方に共通して見られる区分はありません。'));
+        panel.append(el('h3','異なる形で現れること'),el('p',`${state.a}：${sets.onlyA.join('、')||'この観点で固有の区分はありません'}／${state.b}：${sets.onlyB.join('、')||'この観点で固有の区分はありません'}`));
+        panel.append(el('h3',`${axisName()}の比較図`),axisChart(source),markLegend());
+        const evidence=el('div',undefined,{class:'record-grid'});
+        evidence.append(sourceCards(question(state.a,qid),source,state.a),sourceCards(question(state.b,qid),source,state.b));
+        panel.append(el('h3',`${state.a}の根拠／${state.b}の根拠`),evidence);
+        const alt=el('div',undefined,{class:'context-grid'});
+        alt.append(reading(`${state.a}：別の読み方・不足情報`,ctxA?ctxA.alternative_reading:'該当なし'),reading(`${state.b}：別の読み方・不足情報`,ctxB?ctxB.alternative_reading:'該当なし'));
+        panel.append(el('h3','別の読み方・不足情報'),alt);
       }
-      panel.append(cards);
-
-      const contentSpecific = el('section', undefined, { class: 'interpretive-compare' });
-      contentSpecific.append(el('h3', '記録に現れたことを並べて読む'));
-      const contentCards = el('div', undefined, { class: 'compare-cards' });
-      contentCards.append(
-        summaryCard(`${state.a}の${SOURCE_LABEL[src]}記録`, contextFor(state.a, qid, src).reading),
-        summaryCard(`${state.b}の${SOURCE_LABEL[src]}記録`, contextFor(state.b, qid, src).reading),
-        summaryCard('異なりを読むときの留保', '二つの記録を同じ人物の回答として照合せず、それぞれの記録形式と質問範囲で読む。')
-      );
-      contentSpecific.append(contentCards);
-      panel.append(contentSpecific);
-
-      const charts = el('div', undefined, { class: 'compare-charts' });
-      charts.append(
-        donut(axisEntries(qa, src, state.a), `${state.a}：${axisName()}（${SOURCE_LABEL[src]}）`, state.a),
-        donut(axisEntries(qb, src, state.b), `${state.b}：${axisName()}（${SOURCE_LABEL[src]}）`, state.b)
-      );
-      panel.append(charts);
-
-      const interpretive = el('section', undefined, { class: 'interpretive-compare' });
-      interpretive.append(el('h3', `分析軸と理由：${AXIS_LABELS[state.interpretiveAxis]}`));
-      const axisCards = el('div', undefined, { class: 'compare-cards' });
-      const rowA=axisRow(matrixFor(state.a, qid, src), state.interpretiveAxis),rowB=axisRow(matrixFor(state.b, qid, src), state.interpretiveAxis);
-      axisCards.append(
-        summaryCard(`${state.a}の${SOURCE_LABEL[src]}記録`, rowA ? `${rowA.value}。${rowA.reason}` : '該当なし'),
-        summaryCard(`${state.b}の${SOURCE_LABEL[src]}記録`, rowB ? `${rowB.value}。${rowB.reason}` : '該当なし'),
-        summaryCard('読み方の限界', 'この軸は記録範囲の読み取りを補助するものです。個人の特徴、優劣、診断を示すものではありません。')
-      );
-      interpretive.append(axisCards);
-      panel.append(interpretive);
-
-      const evidence = el('details', undefined, { class: 'evidence' });
-      evidence.append(el('summary', `${SOURCE_LABEL[src]}の根拠となる記録を見る`));
-      const columns = el('div', undefined, { class: 'record-grid' });
-      columns.append(sourceCards(qa, src, state.a), sourceCards(qb, src, state.b));
-      evidence.append(columns);
-      panel.append(evidence);
-
       host.append(panel);
     });
 
+    if(state.q!=='all'){
+      const links=el('div',undefined,{class:'evidence-links'});
+      [state.a,state.b].forEach(caseId=>links.append(button(`${caseId}の${state.q}を読む`,false,()=>go({view:'case',caseId,q:state.q}),{class:'evidence-link'})));
+      const foot=el('section',undefined,{class:'block'});
+      foot.append(el('h2','ケース詳細へ移動'),links);
+      host.append(foot);
+    }
     host.append(sectionNotice());
     return host;
   }
@@ -209,15 +368,30 @@
     if(state.view==='case'){
       const caseTabs=el('div',undefined,{class:'tab-scroll',role:'tablist','aria-label':'ケースを選ぶ'});
       CASES.forEach(id=>caseTabs.append(button(id,id===state.caseId,()=>go({caseId:id}),{role:'tab'})));
-      const qTabs=el('div',undefined,{class:'tab-scroll',role:'tablist','aria-label':'質問を選ぶ'});
+      inner.append(caseTabs);
+      const cs=caseSynthesisFor(state.caseId);
+      const whole=el('section',undefined,{class:'case-synthesis'});
+      whole.append(el('h2','このケースを横断して読む'),el('p','Q01〜Q05を通した記述です。問いのタブを切り替えても、ここは変わりません。',{class:'section-notice'}));
+      whole.append(el('p',cs.synthesis.slice(0,90)+(cs.synthesis.length>90?'…':''),{class:'case-lead'}));
+      const more=el('details',undefined,{class:'case-full'});
+      more.append(el('summary','全文を読む'),el('p',cs.synthesis),el('h3','別の読み方と限界'),el('p',cs.alternative_reading,{class:'notice'}));
+      whole.append(more);
+      inner.append(whole);
+      const qTabs=el('div',undefined,{class:'tab-scroll',role:'tablist','aria-label':'問いを選ぶ'});
+      qTabs.append(el('span','問いを選ぶ',{class:'tab-label'}));
       QUESTIONS.forEach(id=>qTabs.append(button(id,id===state.q,()=>go({q:id}),{role:'tab'})));
-      inner.append(caseTabs,qTabs);
+      inner.append(qTabs);
     }
     if(state.view==='compare'){
       const form=el('div',undefined,{class:'compare-controls'});
       const select=(label,value,items,fn)=>{const l=el('label',label);const s=el('select');items.forEach(item=>{const [id,text]=Array.isArray(item)?item:[item,item];const o=el('option',text,{value:id});o.selected=id===value;o.disabled=(label==='ケース B'&&id===state.a)||(label==='ケース A'&&id===state.b);s.append(o)});s.addEventListener('change',e=>fn(e.target.value));l.append(s);return l;};
-      form.append(select('ケース A',state.a,CASES,v=>go({a:v})),select('ケース B',state.b,CASES,v=>go({b:v})),select('質問',state.q,[['all','すべての質問'],...QUESTIONS],v=>go({q:v})),select('比較軸',state.axis,[['topic','話題の向き'],['form','記録の表れ方'],['interpretive','解釈軸']],v=>go({axis:v})),select('表示する記録',state.source,[['both','面談とアンケート'],['interview','面談'],['questionnaire','アンケート']],v=>go({source:v})),select('解釈軸',state.interpretiveAxis,[['self_social','自己・関係・社会'],['inner_outer','内面・外部環境'],['temporal','時間の方向'],['agency','選択・制約・交渉'],['movement','継続・変化・移行'],['abstraction','具体・抽象'],['certainty','確信・迷い・両義性'],['relation_mode','個人・集団・制度']],v=>go({interpretiveAxis:v})));
-      inner.append(form);
+      const group=(title,...fields)=>{const box=el('fieldset',undefined,{class:'control-group'});box.append(el('legend',title));fields.forEach(f=>box.append(f));return box;};
+      form.append(
+        group('比較する対象',select('ケース A',state.a,CASES,v=>go({a:v})),select('ケース B',state.b,CASES,v=>go({b:v})),select('問い',state.q,[['all','すべての問い'],...QUESTIONS],v=>go({q:v}))),
+        group('見る記録',select('記録の種類',state.source,[['both','面談とアンケート'],['interview','面談'],['questionnaire','アンケート']],v=>go({source:v}))),
+        group('見る観点',select('比較軸',state.axis,[['topic','話題の向き'],['form','記録の表れ方'],['interpretive','解釈軸']],v=>go({axis:v})),select('解釈軸',state.interpretiveAxis,[['self_social','自己・関係・社会'],['inner_outer','内面・外部環境'],['temporal','時間の方向'],['agency','選択・制約・交渉'],['movement','継続・変化・移行'],['abstraction','具体・抽象'],['certainty','確信・迷い・両義性'],['relation_mode','個人・集団・制度']],v=>go({interpretiveAxis:v})))
+      );
+      inner.append(form,el('p',compareSentence(),{class:'compare-sentence subnav-sentence'}));
     }
     host.append(inner);
   }
