@@ -47,7 +47,30 @@
   function axisSummary(q, source) { return state.axis==='form' ? (source==='interview'?`面談では${(q.summary.form_difference.match(/面談では(.+?)。/)||[,''])[1]}。`:`アンケートでは${(q.summary.form_difference.match(/アンケートでは(.+?)。/)||[,''])[1]}。`) : (source==='interview'?q.summary.interview_only:q.summary.questionnaire_only); }
   function countTags(questions) { const counts={};questions.forEach(q=>q.tags.forEach(t=>counts[t]=(counts[t]||0)+1));return Object.entries(counts).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])); }
   const palette=['#2f6258','#b4573c','#b99336','#506d90','#856b8c','#6c7a51','#9a5f73','#537f7d'];
-  function donut(entries,label,center) { const total=entries.reduce((n,[,v])=>n+v,0)||1;let cursor=-Math.PI/2;const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 180 180');svg.setAttribute('role','img');svg.setAttribute('aria-label',`${label}: ${entries.map(([n,v])=>`${n} ${v}件`).join('、')}`);const title=document.createElementNS('http://www.w3.org/2000/svg','title');title.textContent=svg.getAttribute('aria-label');svg.append(title);entries.forEach(([name,value],i)=>{const angle=(value/total)*Math.PI*2;const x1=90+60*Math.cos(cursor),y1=90+60*Math.sin(cursor);cursor+=angle;const x2=90+60*Math.cos(cursor),y2=90+60*Math.sin(cursor);const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d',`M90 90 L${x1} ${y1} A60 60 0 ${angle>Math.PI?1:0} 1 ${x2} ${y2} Z`);path.setAttribute('fill',palette[i%palette.length]);svg.append(path);});const circle=document.createElementNS('http://www.w3.org/2000/svg','circle');circle.setAttribute('cx','90');circle.setAttribute('cy','90');circle.setAttribute('r','38');circle.setAttribute('fill','#fffdfa');svg.append(circle);const text=document.createElementNS('http://www.w3.org/2000/svg','text');text.setAttribute('x','90');text.setAttribute('y','88');text.setAttribute('text-anchor','middle');text.setAttribute('font-size','10');text.textContent=center;svg.append(text);const n=document.createElementNS('http://www.w3.org/2000/svg','text');n.setAttribute('x','90');n.setAttribute('y','102');n.setAttribute('text-anchor','middle');n.setAttribute('font-size','9');n.textContent=`${total} 件`;svg.append(n);const figure=el('figure',undefined,{class:'donut'});figure.append(svg,el('figcaption',label));const legend=el('ul',undefined,{class:'legend'});entries.forEach(([name,value],i)=>{const li=el('li');li.append(el('i','',{style:`background:${palette[i%palette.length]}`}),document.createTextNode(`${name} ${value}件`));legend.append(li);});figure.append(legend);return figure; }
+  function donut(entries,label,center) {
+    const values=entries.filter(([,value])=>Number.isFinite(value)&&value>0);
+    const figure=el('figure',undefined,{class:'donut'});
+    if(!values.length){
+      figure.classList.add('donut-empty');
+      figure.append(el('figcaption',label),el('p',`${center}：該当なし`,{class:'chart-empty',role:'status'}));
+      return figure;
+    }
+    const total=values.reduce((n,[,value])=>n+value,0);
+    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.setAttribute('viewBox','0 0 180 180');svg.setAttribute('role','img');svg.setAttribute('aria-label',`${label}: ${values.map(([name,value])=>`${name} ${value}件`).join('、')}`);
+    const title=document.createElementNS('http://www.w3.org/2000/svg','title');title.textContent=svg.getAttribute('aria-label');svg.append(title);
+    if(values.length===1){
+      const ring=document.createElementNS('http://www.w3.org/2000/svg','circle');
+      ring.setAttribute('cx','90');ring.setAttribute('cy','90');ring.setAttribute('r','60');ring.setAttribute('fill',palette[0]);svg.append(ring);
+    }else{
+      let cursor=-Math.PI/2;
+      values.forEach(([name,value],i)=>{const angle=(value/total)*Math.PI*2;const x1=90+60*Math.cos(cursor),y1=90+60*Math.sin(cursor);cursor+=angle;const x2=90+60*Math.cos(cursor),y2=90+60*Math.sin(cursor);const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d',`M90 90 L${x1} ${y1} A60 60 0 ${angle>Math.PI?1:0} 1 ${x2} ${y2} Z`);path.setAttribute('fill',palette[i%palette.length]);svg.append(path);});
+    }
+    const hole=document.createElementNS('http://www.w3.org/2000/svg','circle');hole.setAttribute('cx','90');hole.setAttribute('cy','90');hole.setAttribute('r','38');hole.setAttribute('fill','#fffdfa');svg.append(hole);
+    [[88,center,'10'],[102,`${total} 件`,'9']].forEach(([y,text,size])=>{const node=document.createElementNS('http://www.w3.org/2000/svg','text');node.setAttribute('x','90');node.setAttribute('y',String(y));node.setAttribute('text-anchor','middle');node.setAttribute('font-size',size);node.textContent=text;svg.append(node);});
+    figure.append(svg,el('figcaption',label));
+    const legend=el('ul',undefined,{class:'legend'});values.forEach(([name,value],i)=>{const li=el('li');li.append(el('i','',{style:`background:${palette[i%palette.length]}`}),document.createTextNode(`${name} ${value}件`));legend.append(li);});figure.append(legend);return figure;
+  }
   function bars(counts,label) { const max=Math.max(...Object.values(counts),1);const block=el('section',undefined,{class:'bar-chart'});block.append(el('h3',label));Object.entries(counts).filter(([,v])=>v>0).forEach(([name,value],i)=>{const row=el('div',undefined,{class:'bar-row'});const head=el('div',undefined,{class:'bar-head'});head.append(el('span',name),el('b',`${value}件`));const track=el('div',undefined,{class:'bar-track'}),bar=el('i','',{style:`width:${value/max*100}%;background:${palette[i%palette.length]}`});track.append(bar);row.append(head,track);block.append(row);});return block; }
   function sectionNotice() { return el('p','面談とアンケートは別の記録として扱います。件数は重要度・発話量・参加者数を示しません。',{class:'section-notice'}); }
 
