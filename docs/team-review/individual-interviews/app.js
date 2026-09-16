@@ -1,114 +1,61 @@
 (() => {
   const data = window.TEAM_REVIEW_DATA;
-  const state = { caseId: 'all', questionId: 'Q01', view: 'record', a: 'CASE_01', b: 'CASE_02', range: 'all', mode: 'topic' };
-  const $ = selector => document.querySelector(selector);
-  const el = (tag, text, attrs = {}) => {
-    const node = document.createElement(tag);
-    if (text !== undefined) node.textContent = text;
-    Object.entries(attrs).forEach(([name, value]) => node.setAttribute(name, value));
-    return node;
+  const CASES = data.cases.map(x => x.case_id);
+  const QUESTIONS = ['Q01', 'Q02', 'Q03', 'Q04', 'Q05'];
+  const params = new URLSearchParams(location.search);
+  const valid = (value, list, fallback) => list.includes(value) ? value : fallback;
+  const state = {
+    view: valid(params.get('view'), ['overview', 'case', 'compare'], 'overview'),
+    caseId: valid(params.get('case'), CASES, CASES[0]), q: valid(params.get('q'), QUESTIONS, 'Q01'),
+    a: valid(params.get('a'), CASES, CASES[0]), b: valid(params.get('b'), CASES, CASES[1]),
+    axis: valid(params.get('axis'), ['topic', 'form'], 'topic'), source: valid(params.get('source'), ['both', 'interview', 'questionnaire'], 'both'),
+    all: params.get('all') === '1'
   };
+  if (state.a === state.b) state.b = CASES.find(x => x !== state.a);
+  const $ = selector => document.querySelector(selector);
+  const el = (tag, text, attrs = {}) => { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; Object.entries(attrs).forEach(([k,v]) => node.setAttribute(k,v)); return node; };
+  const question = (caseId, q = state.q) => data.cases.find(x => x.case_id === caseId).questions.find(x => x.question_id === q);
+  const allQuestions = () => data.cases.flatMap(c => c.questions);
+  const updateUrl = () => { const p = new URLSearchParams({view:state.view,q:state.q}); if(state.view==='case')p.set('case',state.caseId); if(state.view==='compare'){p.set('a',state.a);p.set('b',state.b);p.set('axis',state.axis);p.set('source',state.source);if(state.all)p.set('all','1');} history.replaceState({},'',`${location.pathname}?${p}`); };
+  const go = changes => { Object.assign(state,changes); if(state.a===state.b)state.b=CASES.find(x=>x!==state.a); updateUrl(); render(); };
 
   $('#notice').textContent = data.notice;
+  function button(label, selected, handler, attrs = {}) { const b=el('button',label,{type:'button',...attrs}); if(selected!==undefined)b.setAttribute('aria-selected',String(selected)); b.addEventListener('click',handler); return b; }
+  function tagList(tags) { const list=el('ul',undefined,{class:'tags', 'aria-label':'関連するテーマ'}); tags.forEach(t=>list.append(el('li',t))); return list; }
+  function status(text, tone='') { return el('span',text,{class:`state ${tone}`.trim()}); }
+  function summaryCard(title, text, tags=[]) { const s=el('article',undefined,{class:'summary-card'});s.append(el('h3',title),el('p',text));if(tags.length)s.append(tagList(tags));return s; }
+  function reading(title,text,tone='') { const block=el('section',undefined,{class:`reading ${tone}`});block.append(el('h3',title),el('p',text));return block; }
+  function recordPanel(record, q) { const interview=record.record_type==='interview';const panel=el('article',undefined,{class:`record-panel ${interview?'interview':'questionnaire'}`});const summary=interview?q.summary.interview_only:q.summary.questionnaire_only;panel.append(el('div',interview?'面談の記録':'アンケートの記録',{class:'record-title'}),el('p',summary,{class:'record-reading'}),status(record.kind==='masked_quote'?'マスク済み直引用':'編集要約','quiet'));const text=el(record.kind==='masked_quote'?'blockquote':'p',record.text);panel.append(text,tagList(q.tags));if(interview)panel.append(el('p','面談内の記録から作成した抜粋です。発話者と回答範囲は特定していません。',{class:'notice'}));return panel; }
+  function records(q, limit=false, source='both') { const wrap=el('div',undefined,{class:'record-grid'}); const cards=(limit?q.cards.slice(0,2):q.cards).filter(x=>source==='both'||x.record_type===source); cards.filter(x=>x.record_type==='interview').forEach(x=>wrap.append(recordPanel(x,q)));cards.filter(x=>x.record_type==='questionnaire').forEach(x=>wrap.append(recordPanel(x,q)));return wrap; }
+  function countTags(questions) { const counts={};questions.forEach(q=>q.tags.forEach(t=>counts[t]=(counts[t]||0)+1));return Object.entries(counts).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])); }
+  const palette=['#2f6258','#b4573c','#b99336','#506d90','#856b8c','#6c7a51','#9a5f73','#537f7d'];
+  function donut(entries,label,center) { const total=entries.reduce((n,[,v])=>n+v,0)||1;let cursor=-Math.PI/2;const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 180 180');svg.setAttribute('role','img');svg.setAttribute('aria-label',`${label}: ${entries.map(([n,v])=>`${n} ${v}件`).join('、')}`);const title=document.createElementNS('http://www.w3.org/2000/svg','title');title.textContent=svg.getAttribute('aria-label');svg.append(title);entries.forEach(([name,value],i)=>{const angle=(value/total)*Math.PI*2;const x1=90+60*Math.cos(cursor),y1=90+60*Math.sin(cursor);cursor+=angle;const x2=90+60*Math.cos(cursor),y2=90+60*Math.sin(cursor);const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d',`M90 90 L${x1} ${y1} A60 60 0 ${angle>Math.PI?1:0} 1 ${x2} ${y2} Z`);path.setAttribute('fill',palette[i%palette.length]);svg.append(path);});const circle=document.createElementNS('http://www.w3.org/2000/svg','circle');circle.setAttribute('cx','90');circle.setAttribute('cy','90');circle.setAttribute('r','38');circle.setAttribute('fill','#fffdfa');svg.append(circle);const text=document.createElementNS('http://www.w3.org/2000/svg','text');text.setAttribute('x','90');text.setAttribute('y','88');text.setAttribute('text-anchor','middle');text.setAttribute('font-size','10');text.textContent=center;svg.append(text);const n=document.createElementNS('http://www.w3.org/2000/svg','text');n.setAttribute('x','90');n.setAttribute('y','102');n.setAttribute('text-anchor','middle');n.setAttribute('font-size','9');n.textContent=`${total} 件`;svg.append(n);const figure=el('figure',undefined,{class:'donut'});figure.append(svg,el('figcaption',label));const legend=el('ul',undefined,{class:'legend'});entries.forEach(([name,value],i)=>{const li=el('li');li.append(el('i','',{style:`background:${palette[i%palette.length]}`}),document.createTextNode(`${name} ${value}件`));legend.append(li);});figure.append(legend);return figure; }
+  function bars(counts,label) { const max=Math.max(...Object.values(counts),1);const block=el('section',undefined,{class:'bar-chart'});block.append(el('h3',label));Object.entries(counts).filter(([,v])=>v>0).forEach(([name,value],i)=>{const row=el('div',undefined,{class:'bar-row'});const head=el('div',undefined,{class:'bar-head'});head.append(el('span',name),el('b',`${value}件`));const track=el('div',undefined,{class:'bar-track'}),bar=el('i','',{style:`width:${value/max*100}%;background:${palette[i%palette.length]}`});track.append(bar);row.append(head,track);block.append(row);});return block; }
+  function sectionNotice() { return el('p','面談とアンケートは別の記録として扱います。件数は重要度・発話量・参加者数を示しません。',{class:'section-notice'}); }
 
-  function tab(label, active, onClick) {
-    const button = el('button', label, { class: 'tab', type: 'button', role: 'tab', 'aria-selected': String(active) });
-    button.addEventListener('click', onClick);
-    return button;
+  function overview() { const host=el('div',undefined,{class:'overview'});const tags=countTags(allQuestions()).slice(0,5).map(x=>x[0]);const overviewCards=el('div',undefined,{class:'summary-grid'});overviewCards.append(summaryCard('複数ケースに見られた話題',data.cross_case.common,tags.slice(0,3)),summaryCard('面談で表れやすかった記録の形',data.cross_case.record_forms,[]),summaryCard('アンケートと行き来して見えること',data.cross_case.by_question,tags.slice(2)),summaryCard('研究・場づくりへの問い',data.cross_case.questions[0]||'',[]));host.append(el('header','', {class:'view-header'}),overviewCards);host.querySelector('header').append(el('p','全体を見る',{class:'eyebrow'}),el('h2','まず見えること'));
+    const qSection=el('section',undefined,{class:'block'});qSection.append(el('h2','質問ごとの構成'));const qGrid=el('div',undefined,{class:'question-grid'});QUESTIONS.forEach(id=>{const qs=data.cases.map(c=>question(c.case_id,id));const tags=countTags(qs).slice(0,4).map(x=>x[0]);const card=el('article',undefined,{class:'question-card'});card.append(el('p',id,{class:'eyebrow'}),el('h3',`質問 ${id}`),reading('面談側で見えること',qs[0].summary.interview_only),reading('アンケート側で見えること',qs[0].summary.questionnaire_only),reading('共通して確認できること',qs[0].summary.both),tagList(tags),button('詳細を見る',false,()=>go({view:'case',q:id,caseId:CASES[0]})));qGrid.append(card)});qSection.append(qGrid);host.append(qSection);
+    const chart=el('section',undefined,{class:'block'});chart.append(el('h2','全体グラフ'),sectionNotice());const chartGrid=el('div',undefined,{class:'chart-grid'});chartGrid.append(bars(data.cross_case.form_counts.interview,'面談：記録の表れ方'),bars(data.cross_case.form_counts.questionnaire,'アンケート：記録の表れ方'),donut(countTags(allQuestions()).slice(0,6),'テーマタグが現れる質問数','全体'));chart.append(chartGrid);host.append(chart);
+    const cross=el('section',undefined,{class:'block'});cross.append(el('h2','横断して見えること'));[['共通性',data.cross_case.common],['形式差',data.cross_case.record_forms],['研究・場づくりへの問い',data.cross_case.questions.join('\n')]].forEach(([title,text])=>{const d=el('details');d.append(el('summary',title),el('p',text));cross.append(d)});host.append(cross);return host; }
+  function caseView() { const c=data.cases.find(x=>x.case_id===state.caseId),q=question(c.case_id);const host=el('div',undefined,{class:'case-view'});const head=el('header',undefined,{class:'view-header'});head.append(el('p',`${c.case_id} ／ 質問 ${q.question_id}`,{class:'eyebrow'}),el('h2','ケースを読む'));host.append(head);const summary=el('div',undefined,{class:'summary-grid compact'});summary.append(summaryCard('このケースで見えている話題',q.summary.both,q.tags),summaryCard('記録上の特徴',q.summary.form_difference),summaryCard('読む際の留保',q.summary.caveat));host.append(summary);const flow=el('section',undefined,{class:'block'});flow.append(el('h2','この問いで見えていること'),reading('面談とアンケートを行き来して読む',q.summary.both),el('h3','テーマタグ'),tagList(q.tags),el('h3','面談とアンケートの記録'),records(q),el('h3','話題構成の補助図'),donut(countTags([q]),'この質問で確認済みのテーマタグ','質問 '+q.question_id),reading('読み方の留保',q.summary.caveat,'caveat'),sectionNotice());host.append(flow);return host; }
+  function comparison() { const qa=question(state.a),qb=question(state.b),host=el('div',undefined,{class:'compare-view'});const header=el('header',undefined,{class:'view-header'});header.append(el('p','ケースを比べる',{class:'eyebrow'}),el('h2',state.all?'5つの質問の概要':'一つの質問を並べて読む'),el('p','順位や優劣ではなく、話題の向きと記録の表れ方を探索します。'));host.append(header);if(state.all){const matrix=el('div',undefined,{class:'matrix'});QUESTIONS.forEach(id=>{const a=question(state.a,id),b=question(state.b,id);const row=el('button',undefined,{type:'button'});row.append(el('b',id),el('span',a.tags.filter(t=>b.tags.includes(t)).join('、')||'共通項なし'));row.addEventListener('click',()=>go({q:id,all:false}));matrix.append(row)});host.append(el('p','行を選ぶと、その質問の比較詳細を開きます。',{class:'section-notice'}),matrix);return host;}const common=qa.tags.filter(t=>qb.tags.includes(t)),onlyA=qa.tags.filter(t=>!qb.tags.includes(t)),onlyB=qb.tags.filter(t=>!qa.tags.includes(t));const cards=el('div',undefined,{class:'compare-cards'});if(state.axis==='form'){cards.append(summaryCard('ケースAの記録の表れ方',qa.summary.form_difference),summaryCard('ケースBの記録の表れ方',qb.summary.form_difference),summaryCard('比較の留保',qa.summary.caveat));}else [['共通して確認できること',common],['ケースAで確認できること',onlyA],['ケースBで確認できること',onlyB]].forEach(([title,tags])=>cards.append(summaryCard(title,tags.length?tags.join('、'):'共通項なし',tags)));host.append(cards);const charts=el('div',undefined,{class:'compare-charts'});charts.append(donut(countTags([qa]),`${state.a}：テーマタグ`,state.a),donut(countTags([qb]),`${state.b}：テーマタグ`,state.b));host.append(charts,sectionNotice());const evidence=el('details',undefined,{class:'evidence'});evidence.append(el('summary','根拠となる記録を見る'));const columns=el('div',undefined,{class:'record-grid'});columns.append(records(qa,true,state.source),records(qb,true,state.source));evidence.append(columns);host.append(evidence);return host; }
+  function subnav() {
+    const host=$('#subnav'); host.replaceChildren(); const inner=el('div',undefined,{class:'shell subnav-inner'});
+    if(state.view==='case'){
+      const caseTabs=el('div',undefined,{class:'tab-scroll',role:'tablist','aria-label':'ケースを選ぶ'});
+      CASES.forEach(id=>caseTabs.append(button(id,id===state.caseId,()=>go({caseId:id}),{role:'tab'})));
+      const qTabs=el('div',undefined,{class:'tab-scroll',role:'tablist','aria-label':'質問を選ぶ'});
+      QUESTIONS.forEach(id=>qTabs.append(button(id,id===state.q,()=>go({q:id}),{role:'tab'})));
+      inner.append(caseTabs,qTabs);
+    }
+    if(state.view==='compare'){
+      const form=el('div',undefined,{class:'compare-controls'});
+      const select=(label,value,items,fn)=>{const l=el('label',label);const s=el('select');items.forEach(item=>{const [id,text]=Array.isArray(item)?item:[item,item];const o=el('option',text,{value:id});o.selected=id===value;o.disabled=(label==='ケース B'&&id===state.a)||(label==='ケース A'&&id===state.b);s.append(o)});s.addEventListener('change',e=>fn(e.target.value));l.append(s);return l;};
+      form.append(select('ケース A',state.a,CASES,v=>go({a:v})),select('ケース B',state.b,CASES,v=>go({b:v})),select('質問',state.all?'すべて':state.q,[['すべて','すべての質問'],...QUESTIONS],v=>go(v==='すべて'?{all:true}:{q:v,all:false})),select('比較軸',state.axis,[['topic','話題の向き'],['form','記録の表れ方']],v=>go({axis:v})),select('表示する記録',state.source,[['both','面談とアンケート'],['interview','面談'],['questionnaire','アンケート']],v=>go({source:v})));
+      inner.append(form);
+    }
+    host.append(inner);
   }
-  function renderTabs() {
-    const cases = $('#case-tabs'); cases.replaceChildren();
-    cases.append(tab('全体を見る', state.caseId === 'all', () => { state.caseId = 'all'; state.view = 'record'; render(); }));
-    data.cases.forEach(item => cases.append(tab(item.case_id, state.caseId === item.case_id, () => { state.caseId = item.case_id; state.view = 'record'; render(); })));
-    const questions = $('#question-tabs'); questions.replaceChildren();
-    ['Q01', 'Q02', 'Q03', 'Q04', 'Q05'].forEach(id => questions.append(tab(id, state.questionId === id, () => { state.questionId = id; render(); })));
-    document.querySelectorAll('[data-view]').forEach(button => {
-      button.setAttribute('aria-selected', String(button.dataset.view === state.view));
-      button.onclick = () => { state.view = button.dataset.view; render(); };
-    });
-  }
-  function tagList(tags) {
-    const list = el('ul', undefined, { class: 'tag-list', 'aria-label': 'この問いから読み取る話題' });
-    tags.forEach(tag => list.append(el('li', tag)));
-    return list;
-  }
-  function reading(title, text, className = '') {
-    const block = el('section', undefined, { class: `reading ${className}`.trim() });
-    block.append(el('h3', title), el('p', text)); return block;
-  }
-  function card(record) {
-    const name = record.record_type === 'interview' ? '面談の記録' : 'アンケートの記録';
-    const kind = record.kind === 'masked_quote' ? 'マスク済み直引用' : '編集要約';
-    const block = el('article', undefined, { class: 'record-card' });
-    block.append(el('h3', name));
-    const quote = el(record.kind === 'masked_quote' ? 'blockquote' : 'p', record.text);
-    block.append(quote, el('p', kind, { class: 'record-meta' }));
-    if (record.record_type === 'interview') block.append(el('p', '面談内の記録から作成した抜粋です。発話者と回答範囲は特定していません。', { class: 'record-notice' }));
-    return block;
-  }
-  function diagram(tags) {
-    const figure = el('figure', undefined, { class: 'diagram' });
-    figure.append(el('p', '主題構成の補助図', { class: 'section-kicker' }));
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('viewBox', '0 0 280 220'); svg.setAttribute('aria-hidden', 'true');
-    [[95,105,66,'#346458','.86'],[164,92,56,'#ad5539','.78'],[151,151,48,'#c7a752','.72']].forEach(([cx,cy,r,fill,opacity]) => {
-      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-      circle.setAttribute('cx',cx);circle.setAttribute('cy',cy);circle.setAttribute('r',r);circle.setAttribute('fill',fill);circle.setAttribute('opacity',opacity);svg.append(circle);
-    });
-    figure.append(svg, el('figcaption', '話題は固定された分類ではなく、この問いに現れた向きを補助的に示しています。'));
-    const list = el('ul', undefined, { class: 'diagram-list' });
-    tags.slice(0, 3).forEach((tag, index) => { const item = el('li'); item.append(el('span', '', { class: `dot-${'abc'[index]}` }), document.createTextNode(tag)); list.append(item); });
-    figure.append(list); return figure;
-  }
-  function caseRecord(item) {
-    const question = item.questions.find(q => q.question_id === state.questionId);
-    const root = el('div', undefined, { class: 'content-grid' });
-    const main = el('section');
-    main.append(el('p', `${item.case_id} ／ ${question.question_id}`, { class: 'section-kicker' }), el('h2', '二つの記録を、別々に読む', { class: 'section-title' }), tagList(question.tags));
-    const readings = el('div', undefined, { class: 'reading-grid' });
-    readings.append(reading('両方の記録で確認できること', question.summary.both));
-    readings.append(reading('面談記録で確認できること', question.summary.interview_only));
-    readings.append(reading('アンケート回答で確認できること', question.summary.questionnaire_only));
-    readings.append(reading('記録の表れ方の違い', question.summary.form_difference, 'form'));
-    readings.append(reading('読み方の留保', question.summary.caveat, 'caveat'));
-    main.append(readings, el('h3', '人間確認済みの記録', { class: 'section-title' }));
-    const cards = el('div', undefined, { class: 'record-stack' });
-    question.cards.filter(r => r.record_type === 'interview').forEach(r => cards.append(card(r)));
-    question.cards.filter(r => r.record_type === 'questionnaire').forEach(r => cards.append(card(r)));
-    main.append(cards); root.append(main, diagram(question.tags)); return root;
-  }
-  function allRecord() {
-    const root = el('div', undefined, { class: 'all-view' });
-    root.append(el('p', '全体を見る', { class: 'section-kicker' }), el('h2', '横断して見えること', { class: 'section-title' }));
-    [['共通して確認できる話題',data.cross_case.common],['問いごとに見えること',data.cross_case.by_question],['記録の表れ方',data.cross_case.record_forms]].forEach(([title,text]) => { const section=el('section');section.append(el('h2',title),el('p',text));root.append(section); });
-    const inquiry=el('section'); inquiry.append(el('h2','研究・場づくりへ接続する問い'));
-    const list=el('ul',undefined,{class:'question-list'});data.cross_case.questions.forEach(text=>list.append(el('li',text)));inquiry.append(list);root.append(inquiry);return root;
-  }
-  function optionSelect(label, value, options, onChange) {
-    const field = el('label', label); const select = el('select', undefined, { 'aria-label': label });
-    options.forEach(([id, text, disabled]) => { const opt = el('option', text, { value: id }); opt.selected = id === value; opt.disabled = Boolean(disabled); select.append(opt); });
-    select.addEventListener('change', event => onChange(event.target.value)); field.append(select); return field;
-  }
-  function comparisonCard(question, caseId) {
-    const section = el('section'); section.append(el('h3', caseId));
-    if (state.mode === 'topic') {
-      section.append(tagList(question.tags));
-      ['both','interview_only','questionnaire_only'].forEach(key => section.append(reading({both:'両方の記録で確認できること',interview_only:'面談記録で確認できること',questionnaire_only:'アンケート回答で確認できること'}[key], question.summary[key])));
-    } else section.append(reading('記録の表れ方', question.summary.form_difference, 'form'));
-    question.cards.filter(r=>r.record_type==='interview').forEach(r=>section.append(card(r)));
-    question.cards.filter(r=>r.record_type==='questionnaire').forEach(r=>section.append(card(r)));
-    return section;
-  }
-  function comparison() {
-    const root = el('div'); const head = el('div',undefined,{class:'comparison-head'});
-    head.append(el('p','ケース比較',{class:'section-kicker'}),el('h2','記録に現れる視点と表れ方を、並べて読む'),el('p','順位や優劣ではなく、話題の向きと記録の表れ方を探索するための比較です。'));
-    const controls=el('div',undefined,{class:'comparison-controls'}); const cases=data.cases.map(c=>c.case_id);
-    controls.append(optionSelect('ケース A',state.a,cases.map(x=>[x,x,x===state.b]),v=>{state.a=v;render();}));
-    controls.append(optionSelect('ケース B',state.b,cases.map(x=>[x,x,x===state.a]),v=>{state.b=v;render();}));
-    controls.append(optionSelect('問いの範囲',state.range,[['all','すべて'],...['Q01','Q02','Q03','Q04','Q05'].map(x=>[x,x])],v=>{state.range=v;render();}));
-    controls.append(optionSelect('比較するもの',state.mode,[['topic','話題の向き'],['form','記録の表れ方']],v=>{state.mode=v;render();})); root.append(head,controls);
-    const range = state.range==='all'?['Q01','Q02','Q03','Q04','Q05']:[state.range]; const a=data.cases.find(c=>c.case_id===state.a), b=data.cases.find(c=>c.case_id===state.b);
-    range.forEach(questionId=>{const qa=a.questions.find(q=>q.question_id===questionId),qb=b.questions.find(q=>q.question_id===questionId);const summary=el('div',undefined,{class:'comparison-summary'});const common=qa.tags.filter(t=>qb.tags.includes(t));const onlyA=qa.tags.filter(t=>!qb.tags.includes(t));const onlyB=qb.tags.filter(t=>!qa.tags.includes(t));[['両方に見られる話題',common],['Aに見られる話題',onlyA],['Bに見られる話題',onlyB]].forEach(([title,tags])=>{const s=el('section');s.append(el('h3',`${questionId} ／ ${title}`),el('p',tags.length?tags.join('、'):'この問いでは、共通する話題としては示していません。'));summary.append(s)});const columns=el('div',undefined,{class:'compare-columns'});columns.append(comparisonCard(qa,state.a),comparisonCard(qb,state.b));root.append(summary,columns);});return root;}
-  function render() { renderTabs(); const host=$('#view');host.replaceChildren(state.view==='comparison'?comparison():(state.caseId==='all'?allRecord():caseRecord(data.cases.find(c=>c.case_id===state.caseId)))); }
-  render();
+  function render(){document.querySelectorAll('.primary-nav button').forEach(b=>b.setAttribute('aria-current',String(b.dataset.view===state.view)));subnav();const host=$('#view');host.replaceChildren(state.view==='overview'?overview():state.view==='case'?caseView():comparison());}
+  document.querySelectorAll('.primary-nav button').forEach(b=>b.addEventListener('click',()=>go({view:b.dataset.view})));render();
 })();
